@@ -477,6 +477,7 @@
 
 let autoRefreshTimer = null;
 let lastFormData     = null;
+let lastData         = null;
 
 // ── Auth field toggling ─────────────────────────────────────────────────────
 
@@ -815,10 +816,11 @@ function esc(s) {
 
 // ── Agent Quick-View Panel ───────────────────────────────────────────────────
 
-let lastData = null;
-
 function showAgentPanel(type) {
-    if (!lastData) return;
+    if (!lastData) {
+        showAlert('Please connect to a SQL Server first.', 'error');
+        return;
+    }
 
     const panel   = document.getElementById('agentPanel');
     const label   = document.getElementById('agentPanelLabel');
