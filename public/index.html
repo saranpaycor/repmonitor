@@ -816,8 +816,8 @@ function esc(s) {
 
 // ── Agent Quick-View Panel ───────────────────────────────────────────────────
 
-function showAgentPanel(type) {
-    if (!lastData) {
+async function showAgentPanel(type) {
+    if (!lastFormData) {
         showAlert('Please connect to a SQL Server first.', 'error');
         return;
     }
@@ -825,35 +825,57 @@ function showAgentPanel(type) {
     const panel   = document.getElementById('agentPanel');
     const label   = document.getElementById('agentPanelLabel');
     const content = document.getElementById('agentPanelContent');
+    const title   = type === 'distribution' ? 'Distribution Agents' : 'Log Reader Agents';
 
-    const noDistHtml = !lastData.hasDistributionDb
-        ? '<div class="info-note">&#x26A0;&#xFE0F; No <code>distribution</code> database found on this server.</div>'
-        : '';
-
-    if (type === 'distribution') {
-        label.textContent = 'Distribution Agents (' + lastData.distributionAgents.length + ')';
-        content.innerHTML = noDistHtml + buildTable(
-            [{k:'PublisherDB',  l:'Publisher DB'},
-             {k:'Publication',  l:'Publication'},
-             {k:'Subscriber',   l:'Subscriber'},
-             {k:'SubscriberDB', l:'Subscriber DB'},
-             {k:'Status',       l:'Status', type:'status'},
-             {k:'LastAction',   l:'Last Action'},
-             {k:'LastSyncTime', l:'Last Sync'}],
-            lastData.distributionAgents, 'No distribution agents found');
-    } else {
-        label.textContent = 'Log Reader Agents (' + lastData.logReaderAgents.length + ')';
-        content.innerHTML = noDistHtml + buildTable(
-            [{k:'PublisherDB',  l:'Publisher DB'},
-             {k:'Publication',  l:'Publication'},
-             {k:'Status',       l:'Status', type:'status'},
-             {k:'LastAction',   l:'Last Action'},
-             {k:'LastSyncTime', l:'Last Sync'}],
-            lastData.logReaderAgents, 'No log reader agents found');
-    }
-
+    label.textContent = title;
+    content.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);"><div class="spinner" style="margin:0 auto 12px;"></div>Loading ' + title + '…</div>';
     panel.style.display = 'block';
     panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+    try {
+        const resp = await fetch('/api/agents', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(Object.assign({ type }, lastFormData))
+        });
+        const json = await resp.json();
+
+        if (!resp.ok || !json.success) {
+            content.innerHTML = '<div class="err-item"><strong>Error: </strong>' + esc(json.error || 'Failed to fetch agents.') + '</div>';
+            return;
+        }
+
+        if (!json.hasDistributionDb) {
+            content.innerHTML = '<div class="info-note">&#x26A0;&#xFE0F; No <code>distribution</code> database found on this server. Agent details require a Distributor role.</div>';
+            return;
+        }
+
+        label.textContent = title + ' (' + json.agents.length + ')';
+
+        if (type === 'distribution') {
+            content.innerHTML = buildTable(
+                [{k:'PublisherDB',  l:'Publisher DB'},
+                 {k:'Publication',  l:'Publication'},
+                 {k:'Subscriber',   l:'Subscriber'},
+                 {k:'SubscriberDB', l:'Subscriber DB'},
+                 {k:'AgentName',    l:'Agent Name'},
+                 {k:'Status',       l:'Status', type:'status'},
+                 {k:'LastAction',   l:'Last Action'},
+                 {k:'LastSyncTime', l:'Last Sync'}],
+                json.agents, 'No distribution agents found');
+        } else {
+            content.innerHTML = buildTable(
+                [{k:'PublisherDB',  l:'Publisher DB'},
+                 {k:'Publication',  l:'Publication'},
+                 {k:'AgentName',    l:'Agent Name'},
+                 {k:'Status',       l:'Status', type:'status'},
+                 {k:'LastAction',   l:'Last Action'},
+                 {k:'LastSyncTime', l:'Last Sync'}],
+                json.agents, 'No log reader agents found');
+        }
+    } catch (err) {
+        content.innerHTML = '<div class="err-item"><strong>Error: </strong>' + esc(err.message) + '</div>';
+    }
 }
 
 function closeAgentPanel() {

@@ -93,6 +93,135 @@ app.post('/api/connect', async (req, res) => {
     }
 });
 
+// ─── /api/agents — dedicated endpoint for distribution / log reader buttons ──
+
+app.post('/api/agents', async (req, res) => {
+    const { type, server, port, authType, domain, username, password } = req.body;
+
+    if (!['distribution', 'logreader'].includes(type)) {
+        return res.status(400).json({ error: 'Invalid agent type.' });
+    }
+    if (!server || typeof server !== 'string') {
+        return res.status(400).json({ error: 'Server name is required.' });
+    }
+
+    const serverInput = server.trim();
+    if (!VALID_SERVER_RE.test(serverInput)) {
+        return res.status(400).json({ error: 'Invalid server name.' });
+    }
+
+    const validAuthTypes = ['sql', 'windows', 'ntlm'];
+    if (!validAuthTypes.includes(authType)) {
+        return res.status(400).json({ error: 'Invalid authentication type.' });
+    }
+
+    const serverPort = port ? parseInt(port, 10) : 0;
+    if (port && (isNaN(serverPort) || serverPort < 1 || serverPort > 65535)) {
+        return res.status(400).json({ error: 'Invalid port number.' });
+    }
+
+    const backslashIdx = serverInput.indexOf('\\');
+    const serverHost   = backslashIdx > -1 ? serverInput.substring(0, backslashIdx) : serverInput;
+    const instanceName = backslashIdx > -1 ? serverInput.substring(backslashIdx + 1) : undefined;
+
+    const config = {
+        server: serverHost,
+        options: {
+            encrypt: false, trustServerCertificate: true,
+            enableArithAbort: true, connectTimeout: 15000, requestTimeout: 30000
+        }
+    };
+    if (instanceName) { config.options.instanceName = instanceName; }
+    else { config.port = serverPort || 1433; }
+
+    if (authType === 'windows') {
+        config.options.trustedConnection = true;
+    } else if (authType === 'ntlm') {
+        config.authentication = {
+            type: 'ntlm',
+            options: { domain: (domain || '').trim(), userName: (username || '').trim(), password: password || '' }
+        };
+    } else {
+        if (!username || !username.trim()) {
+            return res.status(400).json({ error: 'Username is required for SQL Server authentication.' });
+        }
+        config.user = username.trim();
+        config.password = password || '';
+    }
+
+    let pool;
+    try {
+        pool = await new sql.ConnectionPool(config).connect();
+
+        const dbChk = await pool.request().query(`SELECT COUNT(1) AS cnt FROM sys.databases WHERE name = 'distribution'`);
+        if ((dbChk.recordset[0]?.cnt || 0) === 0) {
+            return res.json({ success: true, agents: [], hasDistributionDb: false });
+        }
+
+        let agents = [];
+        if (type === 'distribution') {
+            const r = await pool.request().query(`
+                SELECT
+                    da.publisher_db                             AS PublisherDB,
+                    da.publication                              AS Publication,
+                    ISNULL(da.subscriber, '')                   AS Subscriber,
+                    da.subscriber_db                            AS SubscriberDB,
+                    da.name                                     AS AgentName,
+                    CASE dh.runstatus
+                        WHEN 1 THEN 'Started'  WHEN 2 THEN 'Succeeded'
+                        WHEN 3 THEN 'Active'   WHEN 4 THEN 'Idle'
+                        WHEN 5 THEN 'Retrying' WHEN 6 THEN 'Failed'
+                        ELSE ISNULL(CAST(dh.runstatus AS VARCHAR(10)), 'Unknown')
+                    END                                         AS Status,
+                    dh.runstatus                                AS StatusCode,
+                    LEFT(ISNULL(dh.comments, ''), 300)          AS LastAction,
+                    CONVERT(VARCHAR(20), dh.time, 120)          AS LastSyncTime
+                FROM distribution.dbo.MSdistribution_agents da
+                OUTER APPLY (
+                    SELECT TOP 1 runstatus, comments, time
+                    FROM   distribution.dbo.MSdistribution_history h
+                    WHERE  h.agent_id = da.id
+                    ORDER BY h.timestamp DESC
+                ) dh
+                ORDER BY da.publisher_db, da.publication, da.subscriber_db
+            `);
+            agents = r.recordset || [];
+        } else {
+            const r = await pool.request().query(`
+                SELECT
+                    la.publisher_db                             AS PublisherDB,
+                    la.publication                              AS Publication,
+                    la.name                                     AS AgentName,
+                    CASE lh.runstatus
+                        WHEN 1 THEN 'Started'  WHEN 2 THEN 'Succeeded'
+                        WHEN 3 THEN 'Active'   WHEN 4 THEN 'Idle'
+                        WHEN 5 THEN 'Retrying' WHEN 6 THEN 'Failed'
+                        ELSE ISNULL(CAST(lh.runstatus AS VARCHAR(10)), 'Unknown')
+                    END                                         AS Status,
+                    lh.runstatus                                AS StatusCode,
+                    LEFT(ISNULL(lh.comments, ''), 300)          AS LastAction,
+                    CONVERT(VARCHAR(20), lh.time, 120)          AS LastSyncTime
+                FROM distribution.dbo.MSlogreader_agents la
+                OUTER APPLY (
+                    SELECT TOP 1 runstatus, comments, time
+                    FROM   distribution.dbo.MSlogreader_history h
+                    WHERE  h.agent_id = la.id
+                    ORDER BY h.timestamp DESC
+                ) lh
+                ORDER BY la.publisher_db
+            `);
+            agents = r.recordset || [];
+        }
+
+        res.json({ success: true, agents, hasDistributionDb: true });
+    } catch (err) {
+        const safeMsg = err.message.replace(/password[^\s,]*/gi, '***');
+        res.status(500).json({ error: safeMsg });
+    } finally {
+        if (pool) pool.close().catch(() => {});
+    }
+});
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 const AGENT_STATUS_CASE = (col) => `
@@ -219,17 +348,31 @@ async function queryReplicationInfo(pool) {
     result.distributionAgents = await safeQuery(pool, 'Distribution Agents', async (p) => {
         const r = await p.request().query(`
             SELECT
-                da.publisher_db                                        AS PublisherDB,
-                da.publication                                         AS Publication,
-                da.subscriber                                          AS Subscriber,
-                da.subscriber_db                                       AS SubscriberDB,
-                ${AGENT_STATUS_CASE('da.status')}                      AS Status,
-                da.status                                              AS StatusCode,
-                da.last_action                                         AS LastAction,
-                CONVERT(VARCHAR(20), da.last_sync_datetime, 120)      AS LastSyncTime
+                da.publisher_db                             AS PublisherDB,
+                da.publication                              AS Publication,
+                ISNULL(da.subscriber, '')                   AS Subscriber,
+                da.subscriber_db                            AS SubscriberDB,
+                da.name                                     AS AgentName,
+                CASE dh.runstatus
+                    WHEN 1 THEN 'Started'
+                    WHEN 2 THEN 'Succeeded'
+                    WHEN 3 THEN 'Active'
+                    WHEN 4 THEN 'Idle'
+                    WHEN 5 THEN 'Retrying'
+                    WHEN 6 THEN 'Failed'
+                    ELSE ISNULL(CAST(dh.runstatus AS VARCHAR(10)), 'Unknown')
+                END                                         AS Status,
+                dh.runstatus                                AS StatusCode,
+                LEFT(ISNULL(dh.comments, ''), 300)          AS LastAction,
+                CONVERT(VARCHAR(20), dh.time, 120)          AS LastSyncTime
             FROM distribution.dbo.MSdistribution_agents da
-            WHERE da.is_offload = 0
-            ORDER BY da.publication, da.subscriber_db
+            OUTER APPLY (
+                SELECT TOP 1 runstatus, comments, time
+                FROM   distribution.dbo.MSdistribution_history h
+                WHERE  h.agent_id = da.id
+                ORDER BY h.timestamp DESC
+            ) dh
+            ORDER BY da.publisher_db, da.publication, da.subscriber_db
         `);
         return r.recordset || [];
     }, result.errors);
@@ -238,13 +381,28 @@ async function queryReplicationInfo(pool) {
     result.logReaderAgents = await safeQuery(pool, 'Log Reader Agents', async (p) => {
         const r = await p.request().query(`
             SELECT
-                la.publisher_db                                        AS PublisherDB,
-                la.publication                                         AS Publication,
-                ${AGENT_STATUS_CASE('la.status')}                      AS Status,
-                la.status                                              AS StatusCode,
-                la.last_action                                         AS LastAction,
-                CONVERT(VARCHAR(20), la.last_sync_datetime, 120)      AS LastSyncTime
+                la.publisher_db                             AS PublisherDB,
+                la.publication                              AS Publication,
+                la.name                                     AS AgentName,
+                CASE lh.runstatus
+                    WHEN 1 THEN 'Started'
+                    WHEN 2 THEN 'Succeeded'
+                    WHEN 3 THEN 'Active'
+                    WHEN 4 THEN 'Idle'
+                    WHEN 5 THEN 'Retrying'
+                    WHEN 6 THEN 'Failed'
+                    ELSE ISNULL(CAST(lh.runstatus AS VARCHAR(10)), 'Unknown')
+                END                                         AS Status,
+                lh.runstatus                                AS StatusCode,
+                LEFT(ISNULL(lh.comments, ''), 300)          AS LastAction,
+                CONVERT(VARCHAR(20), lh.time, 120)          AS LastSyncTime
             FROM distribution.dbo.MSlogreader_agents la
+            OUTER APPLY (
+                SELECT TOP 1 runstatus, comments, time
+                FROM   distribution.dbo.MSlogreader_history h
+                WHERE  h.agent_id = la.id
+                ORDER BY h.timestamp DESC
+            ) lh
             ORDER BY la.publisher_db
         `);
         return r.recordset || [];
@@ -254,12 +412,27 @@ async function queryReplicationInfo(pool) {
     result.snapshotAgents = await safeQuery(pool, 'Snapshot Agents', async (p) => {
         const r = await p.request().query(`
             SELECT
-                sa.publisher_db                  AS PublisherDB,
-                sa.publication                   AS Publication,
-                ${AGENT_STATUS_CASE('sa.status')} AS Status,
-                sa.status                        AS StatusCode,
-                sa.last_action                   AS LastAction
+                sa.publisher_db                             AS PublisherDB,
+                sa.publication                              AS Publication,
+                sa.name                                     AS AgentName,
+                CASE sh.runstatus
+                    WHEN 1 THEN 'Started'
+                    WHEN 2 THEN 'Succeeded'
+                    WHEN 3 THEN 'Active'
+                    WHEN 4 THEN 'Idle'
+                    WHEN 5 THEN 'Retrying'
+                    WHEN 6 THEN 'Failed'
+                    ELSE ISNULL(CAST(sh.runstatus AS VARCHAR(10)), 'Unknown')
+                END                                         AS Status,
+                sh.runstatus                                AS StatusCode,
+                LEFT(ISNULL(sh.comments, ''), 300)          AS LastAction
             FROM distribution.dbo.MSsnapshot_agents sa
+            OUTER APPLY (
+                SELECT TOP 1 runstatus, comments
+                FROM   distribution.dbo.MSsnapshot_history h
+                WHERE  h.agent_id = sa.id
+                ORDER BY h.timestamp DESC
+            ) sh
             ORDER BY sa.publisher_db
         `);
         return r.recordset || [];
@@ -269,16 +442,31 @@ async function queryReplicationInfo(pool) {
     result.mergeAgents = await safeQuery(pool, 'Merge Agents', async (p) => {
         const r = await p.request().query(`
             SELECT
-                ma.publisher_db                                        AS PublisherDB,
-                ma.publication                                         AS Publication,
-                ma.subscriber                                          AS Subscriber,
-                ma.subscriber_db                                       AS SubscriberDB,
-                ${AGENT_STATUS_CASE('ma.status')}                      AS Status,
-                ma.status                                              AS StatusCode,
-                ma.last_action                                         AS LastAction,
-                CONVERT(VARCHAR(20), ma.last_sync_datetime, 120)      AS LastSyncTime
+                ma.publisher_db                             AS PublisherDB,
+                ma.publication                              AS Publication,
+                ISNULL(ma.subscriber, '')                   AS Subscriber,
+                ma.subscriber_db                            AS SubscriberDB,
+                ma.name                                     AS AgentName,
+                CASE mh.runstatus
+                    WHEN 1 THEN 'Started'
+                    WHEN 2 THEN 'Succeeded'
+                    WHEN 3 THEN 'Active'
+                    WHEN 4 THEN 'Idle'
+                    WHEN 5 THEN 'Retrying'
+                    WHEN 6 THEN 'Failed'
+                    ELSE ISNULL(CAST(mh.runstatus AS VARCHAR(10)), 'Unknown')
+                END                                         AS Status,
+                mh.runstatus                                AS StatusCode,
+                LEFT(ISNULL(mh.comments, ''), 300)          AS LastAction,
+                CONVERT(VARCHAR(20), mh.time, 120)          AS LastSyncTime
             FROM distribution.dbo.MSmerge_agents ma
-            ORDER BY ma.publication, ma.subscriber_db
+            OUTER APPLY (
+                SELECT TOP 1 runstatus, comments, time
+                FROM   distribution.dbo.MSmerge_history h
+                WHERE  h.agent_id = ma.id
+                ORDER BY h.timestamp DESC
+            ) mh
+            ORDER BY ma.publisher_db, ma.publication, ma.subscriber_db
         `);
         return r.recordset || [];
     }, result.errors);
