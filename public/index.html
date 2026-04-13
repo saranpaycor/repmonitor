@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Server Replication Monitor</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg:             #0d1117;
+            --surface:        #161b22;
+            --surface2:       #21262d;
+            --border:         #30363d;
+            --text:           #e6edf3;
+            --text-muted:     #7d8590;
+            --primary:        #2f81f7;
+            --primary-hover:  #1f6feb;
+            --success:        #3fb950;
+            --warning:        #d29922;
+            --danger:         #f85149;
+            --info:           #58a6ff;
+        }
+
+        body {
+            font-family: 'Segoe UI', -apple-system, system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            font-size: 14px;
+        }
+
+        /* ── Header ── */
+        header {
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .header-left { display: flex; align-items: center; gap: 12px; }
+        .header-logo {
+            width: 34px; height: 34px;
+            background: var(--primary);
+            border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 16px; color: #fff; flex-shrink: 0;
+        }
+        .header-title   { font-size: 15px; font-weight: 600; }
+        .header-sub     { font-size: 11px; color: var(--text-muted); }
+        .header-status  { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-muted); }
+        .status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: var(--text-muted);
+            transition: background .3s, box-shadow .3s;
+        }
+        .status-dot.connected { background: var(--success); box-shadow: 0 0 6px var(--success); }
+
+        /* ── Layout ── */
+        main { max-width: 1440px; margin: 0 auto; padding: 24px; }
+
+        /* ── Card ── */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 20px;
+        }
+        .card-title {
+            font-size: 14px; font-weight: 600; margin-bottom: 16px;
+            display: flex; align-items: center; gap: 8px;
+            color: var(--text);
+        }
+
+        /* ── Form ── */
+        .form-row {
+            display: grid;
+            grid-template-columns: 2fr 120px 180px 180px 180px;
+            gap: 12px;
+            align-items: end;
+            flex-wrap: wrap;
+        }
+        .form-row-creds {
+            display: grid;
+            grid-template-columns: 160px 1fr 1fr;
+            gap: 12px;
+            align-items: end;
+            margin-top: 12px;
+        }
+        .form-group { display: flex; flex-direction: column; gap: 5px; }
+        label {
+            font-size: 11px; font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: .5px;
+        }
+        input[type="text"],
+        input[type="password"],
+        input[type="number"],
+        select {
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            color: var(--text);
+            padding: 8px 12px;
+            font-size: 14px;
+            width: 100%;
+            outline: none;
+            transition: border-color .2s;
+        }
+        input:focus, select:focus { border-color: var(--primary); }
+        input::placeholder { color: var(--text-muted); }
+        select option { background: var(--surface2); }
+
+        /* ── Buttons ── */
+        .btn {
+            height: 36px;
+            padding: 0 18px;
+            border-radius: 8px;
+            border: none;
+            font-size: 13px; font-weight: 500;
+            cursor: pointer;
+            display: inline-flex; align-items: center; gap: 6px;
+            transition: background .15s, transform .1s;
+            white-space: nowrap;
+        }
+        .btn:active { transform: scale(.97); }
+        .btn:disabled { opacity: .5; cursor: not-allowed; }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+        .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+        .btn-secondary:hover:not(:disabled) { background: var(--border); }
+
+        .btn-row {
+            display: flex; align-items: center; gap: 10px; margin-top: 14px;
+        }
+        .auto-refresh-label {
+            display: flex; align-items: center; gap: 6px;
+            font-size: 12px; color: var(--text-muted);
+            cursor: pointer; user-select: none;
+        }
+
+        /* ── Alert ── */
+        .alert {
+            border-radius: 8px; padding: 10px 14px;
+            margin-top: 12px; font-size: 13px; display: none;
+        }
+        .alert.show { display: block; }
+        .alert-error   { background: rgba(248,81,73,.12);  border: 1px solid rgba(248,81,73,.3);  color: var(--danger); }
+        .alert-success { background: rgba(63,185,80,.12);  border: 1px solid rgba(63,185,80,.3);  color: var(--success); }
+
+        /* ── Results ── */
+        #results { display: none; }
+        #results.visible { display: block; }
+
+        .results-header {
+            display: flex; align-items: center;
+            justify-content: space-between;
+            margin-bottom: 14px;
+        }
+        .results-meta { font-size: 12px; color: var(--text-muted); }
+        .server-badge {
+            font-size: 12px; color: var(--info);
+            background: rgba(88,166,255,.1);
+            border: 1px solid rgba(88,166,255,.2);
+            border-radius: 6px; padding: 3px 10px;
+        }
+
+        /* ── Summary ── */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .summary-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 16px;
+            text-align: center;
+        }
+        .summary-card .count { font-size: 30px; font-weight: 700; line-height: 1; margin-bottom: 4px; }
+        .summary-card .slabel {
+            font-size: 11px; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: .5px;
+        }
+        .c-running { color: var(--success); }
+        .c-failed  { color: var(--danger);  }
+        .c-normal  { color: var(--primary); }
+
+        /* ── Tabs ── */
+        .tabs { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+        .tab-list {
+            display: flex;
+            border-bottom: 1px solid var(--border);
+            overflow-x: auto;
+            scrollbar-width: thin;
+        }
+        .tab-btn {
+            padding: 12px 18px; border: none;
+            background: transparent; color: var(--text-muted);
+            cursor: pointer; font-size: 13px; font-weight: 500;
+            white-space: nowrap;
+            border-bottom: 2px solid transparent;
+            transition: color .15s, border-color .15s;
+        }
+        .tab-btn:hover { color: var(--text); }
+        .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+        .tab-badge {
+            display: inline-flex; align-items: center; justify-content: center;
+            background: var(--surface2);
+            border-radius: 10px; min-width: 18px; height: 18px;
+            padding: 0 5px; font-size: 11px; margin-left: 5px;
+        }
+        .tab-badge.hl { background: var(--danger); color: #fff; }
+
+        .tab-panel { display: none; padding: 20px; }
+        .tab-panel.active { display: block; }
+
+        /* ── Table ── */
+        .table-wrap { overflow-x: auto; border-radius: 8px; border: 1px solid var(--border); }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        thead th {
+            background: var(--surface2);
+            padding: 9px 14px;
+            text-align: left;
+            font-size: 11px; font-weight: 600;
+            text-transform: uppercase; letter-spacing: .5px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            border-bottom: 1px solid var(--border);
+        }
+        tbody tr { border-bottom: 1px solid rgba(48,54,61,.5); transition: background .1s; }
+        tbody tr:last-child { border-bottom: none; }
+        tbody tr:hover { background: rgba(48,54,61,.5); }
+        td { padding: 9px 14px; vertical-align: middle; }
+
+        /* ── Status Badges ── */
+        .badge {
+            display: inline-flex; align-items: center; gap: 4px;
+            padding: 2px 10px; border-radius: 20px;
+            font-size: 11px; font-weight: 600;
+            text-transform: uppercase; letter-spacing: .3px;
+            white-space: nowrap;
+        }
+        .bdot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+
+        .b-running, .b-active, .b-started {
+            background: rgba(63,185,80,.14); color: var(--success);
+        }
+        .b-running .bdot, .b-active .bdot, .b-started .bdot { background: var(--success); }
+
+        .b-succeeded {
+            background: rgba(47,129,247,.14); color: var(--info);
+        }
+        .b-succeeded .bdot { background: var(--info); }
+
+        .b-failed {
+            background: rgba(248,81,73,.14); color: var(--danger);
+        }
+        .b-failed .bdot { background: var(--danger); }
+
+        .b-retrying {
+            background: rgba(210,153,34,.14); color: var(--warning);
+        }
+        .b-retrying .bdot { background: var(--warning); }
+
+        .b-idle, .b-unknown, .b-cancelled, .b-never-run {
+            background: rgba(125,133,144,.12); color: var(--text-muted);
+        }
+        .b-idle .bdot, .b-unknown .bdot, .b-cancelled .bdot, .b-never-run .bdot { background: var(--text-muted); }
+
+        .b-enabled  { background: rgba(63,185,80,.1);   color: var(--success); }
+        .b-disabled { background: rgba(125,133,144,.1); color: var(--text-muted); }
+
+        /* ── Latency ── */
+        .lat-good { color: var(--success); }
+        .lat-warn { color: var(--warning); }
+        .lat-bad  { color: var(--danger);  }
+
+        /* ── Empty state ── */
+        .empty {
+            text-align: center; padding: 48px 20px;
+            color: var(--text-muted);
+        }
+        .empty .eicon { font-size: 36px; margin-bottom: 10px; }
+        .empty .etitle { font-size: 14px; font-weight: 500; color: var(--text); margin-bottom: 4px; }
+
+        /* ── Info note ── */
+        .info-note {
+            background: rgba(47,129,247,.1);
+            border: 1px solid rgba(47,129,247,.2);
+            border-radius: 8px; padding: 10px 14px;
+            font-size: 13px; color: var(--info);
+            margin-bottom: 14px;
+        }
+
+        /* ── Error list ── */
+        .err-item {
+            background: rgba(248,81,73,.08);
+            border: 1px solid rgba(248,81,73,.2);
+            border-radius: 8px; padding: 9px 14px;
+            margin-bottom: 8px; font-size: 13px;
+        }
+        .err-item strong { color: var(--danger); }
+
+        /* ── Loading overlay ── */
+        #loading {
+            display: none; position: fixed; inset: 0;
+            background: rgba(13,17,23,.75);
+            z-index: 1000;
+            flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+        }
+        #loading.show { display: flex; }
+        .spinner {
+            width: 38px; height: 38px;
+            border: 3px solid var(--border);
+            border-top-color: var(--primary);
+            border-radius: 50%;
+            animation: spin .8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { font-size: 13px; color: var(--text-muted); }
+
+        /* ── Responsive ── */
+        @media (max-width: 900px) {
+            .form-row { grid-template-columns: 1fr 1fr; }
+            .form-row-creds { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 580px) {
+            main { padding: 14px; }
+            .form-row, .form-row-creds { grid-template-columns: 1fr; }
+            .summary-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="loading">
+    <div class="spinner"></div>
+    <div class="loading-text" id="loadingText">Connecting…</div>
+</div>
+
+<!-- Header -->
+<header>
+    <div class="header-left">
+        <div class="header-logo">R</div>
+        <div>
+            <div class="header-title">SQL Replication Monitor</div>
+            <div class="header-sub">Replication agent &amp; job status</div>
+        </div>
+    </div>
+    <div class="header-status">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Not connected</span>
+    </div>
+</header>
+
+<main>
+    <!-- Connection form -->
+    <div class="card">
+        <div class="card-title">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" style="color:var(--primary)">
+                <path d="M1 10.5A1.5 1.5 0 002.5 12h11a1.5 1.5 0 000-3h-11A1.5 1.5 0 001 10.5zm0-5a1.5 1.5 0 001.5 1.5h7a1.5 1.5 0 000-3h-7A1.5 1.5 0 001 5.5zM13 5.5a1.5 1.5 0 113 0 1.5 1.5 0 01-3 0zm-3 5 a1.5 1.5 0 113 0 1.5 1.5 0 01-3 0z"/>
+            </svg>
+            Connection
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label for="serverInput">Server Name</label>
+                <input type="text" id="serverInput"
+                       placeholder="SQLSERVER01  or  SQLSERVER01\INSTANCE"
+                       autocomplete="off" spellcheck="false">
+            </div>
+            <div class="form-group">
+                <label for="portInput">Port</label>
+                <input type="number" id="portInput" placeholder="1433" min="1" max="65535" value="">
+            </div>
+            <div class="form-group">
+                <label for="authType">Authentication</label>
+                <select id="authType" onchange="updateAuthFields()">
+                    <option value="sql">SQL Server Auth</option>
+                    <option value="windows">Windows Integrated Auth</option>
+                    <option value="ntlm">Windows NTLM (explicit)</option>
+                </select>
+            </div>
+            <!-- SQL / NTLM credential fields shown inline on wider screens -->
+            <div class="form-group" id="usernameGroup">
+                <label for="usernameInput">Username</label>
+                <input type="text" id="usernameInput" placeholder="sa" autocomplete="username">
+            </div>
+            <div class="form-group" id="passwordGroup">
+                <label for="passwordInput">Password</label>
+                <input type="password" id="passwordInput" placeholder="••••••••" autocomplete="current-password">
+            </div>
+        </div>
+
+        <!-- NTLM domain row (hidden by default) -->
+        <div class="form-row-creds" id="ntlmRow" style="display:none">
+            <div class="form-group">
+                <label for="domainInput">Domain</label>
+                <input type="text" id="domainInput" placeholder="CORP" autocomplete="off">
+            </div>
+        </div>
+
+        <div class="btn-row">
+            <button id="connectBtn" class="btn btn-primary" onclick="connect()">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M5 3a5 5 0 000 10h6a5 5 0 000-10H5zm6 9H5a4 4 0 110-8h6a4 4 0 110 8z"/>
+                </svg>
+                Connect
+            </button>
+            <button id="refreshBtn" class="btn btn-secondary" onclick="doRefresh()" style="display:none">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M11.534 7h3.932a.25.25 0 01.192.41l-1.966 2.36a.25.25 0 01-.384 0l-1.966-2.36a.25.25 0 01.192-.41zm-11 1a.25.25 0 01-.192-.41l1.966-2.36a.25.25 0 01.384 0l1.966 2.36a.25.25 0 01-.192.41H.534zM8 3.5A4.5 4.5 0 0112.5 8 .75.75 0 0014 8 5.5 5.5 0 002.5 8a.75.75 0 001.5 0A4.5 4.5 0 018 3.5zm0 9A4.5 4.5 0 013.5 8 .75.75 0 002 8a5.5 5.5 0 0011 0 .75.75 0 00-1.5 0A4.5 4.5 0 018 12.5z"/>
+                </svg>
+                Refresh
+            </button>
+            <label class="auto-refresh-label" id="autoRefreshLabel" style="display:none">
+                <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()">
+                Auto-refresh (30 s)
+            </label>
+        </div>
+
+        <div id="alertBox" class="alert"></div>
+    </div>
+
+    <!-- Results -->
+    <div id="results">
+        <div class="results-header">
+            <div class="results-meta" id="lastUpdated"></div>
+            <div class="server-badge" id="serverBadge" style="display:none"></div>
+        </div>
+
+        <div class="summary-grid" id="summaryGrid"></div>
+
+        <div class="tabs">
+            <div class="tab-list" id="tabList"></div>
+            <div id="tabContent"></div>
+        </div>
+    </div>
+</main>
+
+<script>
+'use strict';
+
+let autoRefreshTimer = null;
+let lastFormData     = null;
+
+// ── Auth field toggling ─────────────────────────────────────────────────────
+
+function updateAuthFields() {
+    const auth = document.getElementById('authType').value;
+    const show = (id, visible) => (document.getElementById(id).style.display = visible ? '' : 'none');
+
+    show('usernameGroup', auth !== 'windows');
+    show('passwordGroup', auth !== 'windows');
+    show('ntlmRow',       auth === 'ntlm');
+}
+
+// ── Form helpers ────────────────────────────────────────────────────────────
+
+function getFormData() {
+    return {
+        server:   document.getElementById('serverInput').value.trim(),
+        port:     document.getElementById('portInput').value.trim(),
+        authType: document.getElementById('authType').value,
+        domain:   document.getElementById('domainInput').value.trim(),
+        username: document.getElementById('usernameInput').value.trim(),
+        password: document.getElementById('passwordInput').value
+    };
+}
+
+function showAlert(msg, type) {
+    const el = document.getElementById('alertBox');
+    el.textContent = msg;
+    el.className = `alert alert-${type} show`;
+}
+function hideAlert() { document.getElementById('alertBox').className = 'alert'; }
+
+function showLoading(msg) {
+    document.getElementById('loadingText').textContent = msg || 'Loading…';
+    document.getElementById('loading').classList.add('show');
+}
+function hideLoading() { document.getElementById('loading').classList.remove('show'); }
+
+function setBusy(busy) {
+    document.getElementById('connectBtn').disabled = busy;
+    document.getElementById('refreshBtn').disabled = busy;
+}
+
+// ── Connect / Refresh ───────────────────────────────────────────────────────
+
+async function connect() {
+    const form = getFormData();
+    if (!form.server) { showAlert('Please enter a server name.', 'error'); return; }
+
+    hideAlert();
+    lastFormData = form;
+    showLoading('Connecting to SQL Server…');
+    setBusy(true);
+
+    try {
+        const json = await postConnect(form);
+        renderResults(json.data);
+        setConnected(true, json.data.serverName || form.server);
+        showAlert(`Successfully connected to ${json.data.serverName || form.server}`, 'success');
+    } catch (err) {
+        showAlert(err.message, 'error');
+        setConnected(false);
+    } finally {
+        hideLoading();
+        setBusy(false);
+    }
+}
+
+async function doRefresh() {
+    if (!lastFormData) return;
+    showLoading('Refreshing…');
+    setBusy(true);
+    try {
+        const json = await postConnect(lastFormData);
+        renderResults(json.data);
+        hideAlert();
+    } catch (err) {
+        showAlert(err.message, 'error');
+    } finally {
+        hideLoading();
+        setBusy(false);
+    }
+}
+
+async function postConnect(form) {
+    const resp = await fetch('/api/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form)
+    });
+    const json = await resp.json();
+    if (!resp.ok || !json.success) throw new Error(json.error || 'Connection failed.');
+    return json;
+}
+
+function toggleAutoRefresh() {
+    if (document.getElementById('autoRefresh').checked) {
+        autoRefreshTimer = setInterval(doRefresh, 30000);
+    } else {
+        clearInterval(autoRefreshTimer);
+        autoRefreshTimer = null;
+    }
+}
+
+function setConnected(connected, serverName) {
+    const dot  = document.getElementById('statusDot');
+    const text = document.getElementById('statusText');
+    dot.className = 'status-dot' + (connected ? ' connected' : '');
+    text.textContent = connected ? `Connected — ${serverName}` : 'Not connected';
+    document.getElementById('refreshBtn').style.display      = connected ? 'inline-flex' : 'none';
+    document.getElementById('autoRefreshLabel').style.display = connected ? 'flex'        : 'none';
+    if (!connected) {
+        document.getElementById('results').classList.remove('visible');
+        clearInterval(autoRefreshTimer);
+    }
+}
+
+// ── Render ──────────────────────────────────────────────────────────────────
+
+function renderResults(data) {
+    document.getElementById('results').classList.add('visible');
+
+    document.getElementById('lastUpdated').textContent = 'Last updated: ' + new Date().toLocaleString();
+    const badge = document.getElementById('serverBadge');
+    if (data.serverName) {
+        badge.textContent = data.serverName + (data.sqlVersion ? '  ·  ' + data.sqlVersion : '');
+        badge.style.display = '';
+    }
+
+    // Summary counts
+    const runningCount  = data.runningJobs.length;
+    const failedJobs    = data.allReplJobs.filter(j => j.LastStatus === 'Failed').length;
+    const failedDist    = data.distributionAgents.filter(a => a.StatusCode === 6).length;
+    const failedLR      = data.logReaderAgents.filter(a => a.StatusCode === 6).length;
+    const totalFailed   = failedJobs + failedDist + failedLR;
+    const totalAgents   = data.distributionAgents.length + data.logReaderAgents.length +
+                          data.snapshotAgents.length + data.mergeAgents.length;
+
+    document.getElementById('summaryGrid').innerHTML = `
+        <div class="summary-card"><div class="count ${runningCount ? 'c-running' : 'c-normal'}">${runningCount}</div><div class="slabel">Running Jobs</div></div>
+        <div class="summary-card"><div class="count c-normal">${data.allReplJobs.length}</div><div class="slabel">Total Repl Jobs</div></div>
+        <div class="summary-card"><div class="count c-normal">${totalAgents}</div><div class="slabel">Repl Agents</div></div>
+        <div class="summary-card"><div class="count ${totalFailed ? 'c-failed' : 'c-normal'}">${totalFailed}</div><div class="slabel">Failed</div></div>
+        <div class="summary-card"><div class="count c-normal">${data.distributionAgents.length}</div><div class="slabel">Distribution</div></div>
+        <div class="summary-card"><div class="count c-normal">${data.logReaderAgents.length}</div><div class="slabel">Log Reader</div></div>
+    `;
+
+    // Build tab definitions
+    const noDistHtml = !data.hasDistributionDb
+        ? `<div class="info-note">⚠️ No <code>distribution</code> database found on this server. Agent details require a distributor.</div>`
+        : '';
+
+    const tabs = [
+        {
+            id: 'running', label: 'Running Jobs',
+            badge: runningCount, badgeHl: runningCount > 0,
+            html: () => runningCount === 0
+                ? empty('✅', 'No running replication jobs', 'All replication jobs are idle or completed.')
+                : buildTable(
+                    [{ k:'JobName',     l:'Job Name' },
+                     { k:'Category',    l:'Category' },
+                     { k:'CurrentStep', l:'Current Step' },
+                     { k:'StartTime',   l:'Start Time' }],
+                    data.runningJobs)
+        },
+        {
+            id: 'alljobs', label: 'All Jobs',
+            badge: data.allReplJobs.length,
+            html: () => buildTable(
+                [{ k:'JobName',      l:'Job Name' },
+                 { k:'Category',     l:'Category' },
+                 { k:'IsEnabled',    l:'Enabled',     type:'enabled' },
+                 { k:'LastStatus',   l:'Last Status', type:'status' },
+                 { k:'LastStartTime',l:'Last Start' },
+                 { k:'LastEndTime',  l:'Last End' }],
+                data.allReplJobs, 'No replication jobs found')
+        },
+        {
+            id: 'distribution', label: 'Distribution',
+            badge: data.distributionAgents.length,
+            html: () => noDistHtml + buildTable(
+                [{ k:'PublisherDB',  l:'Publisher DB' },
+                 { k:'Publication',  l:'Publication' },
+                 { k:'Subscriber',   l:'Subscriber' },
+                 { k:'SubscriberDB', l:'Subscriber DB' },
+                 { k:'Status',       l:'Status', type:'status' },
+                 { k:'LastAction',   l:'Last Action' },
+                 { k:'LastSyncTime', l:'Last Sync' }],
+                data.distributionAgents, 'No distribution agents found')
+        },
+        {
+            id: 'logreader', label: 'Log Reader',
+            badge: data.logReaderAgents.length,
+            html: () => noDistHtml + buildTable(
+                [{ k:'PublisherDB',  l:'Publisher DB' },
+                 { k:'Publication',  l:'Publication' },
+                 { k:'Status',       l:'Status', type:'status' },
+                 { k:'LastAction',   l:'Last Action' },
+                 { k:'LastSyncTime', l:'Last Sync' }],
+                data.logReaderAgents, 'No log reader agents found')
+        },
+        {
+            id: 'snapshot', label: 'Snapshot',
+            badge: data.snapshotAgents.length,
+            html: () => noDistHtml + buildTable(
+                [{ k:'PublisherDB',  l:'Publisher DB' },
+                 { k:'Publication',  l:'Publication' },
+                 { k:'Status',       l:'Status', type:'status' },
+                 { k:'LastAction',   l:'Last Action' }],
+                data.snapshotAgents, 'No snapshot agents found')
+        },
+        {
+            id: 'merge', label: 'Merge',
+            badge: data.mergeAgents.length,
+            html: () => noDistHtml + buildTable(
+                [{ k:'PublisherDB',  l:'Publisher DB' },
+                 { k:'Publication',  l:'Publication' },
+                 { k:'Subscriber',   l:'Subscriber' },
+                 { k:'SubscriberDB', l:'Subscriber DB' },
+                 { k:'Status',       l:'Status', type:'status' },
+                 { k:'LastAction',   l:'Last Action' },
+                 { k:'LastSyncTime', l:'Last Sync' }],
+                data.mergeAgents, 'No merge agents found')
+        }
+    ];
+
+    if (data.monitorData && data.monitorData.length > 0) {
+        tabs.push({
+            id: 'monitor', label: 'Monitor',
+            badge: data.monitorData.length,
+            html: () => buildTable(
+                [{ k:'Publisher',     l:'Publisher' },
+                 { k:'PublisherDB',   l:'Publisher DB' },
+                 { k:'Publication',   l:'Publication' },
+                 { k:'PublicationType',l:'Type' },
+                 { k:'Status',        l:'Status', type:'status' },
+                 { k:'CurrentLatency',l:'Cur Latency (s)', type:'lat' },
+                 { k:'AvgLatency',    l:'Avg Latency (s)', type:'lat' },
+                 { k:'WorstLatency',  l:'Worst Latency (s)', type:'lat' }],
+                data.monitorData)
+        });
+    }
+
+    if (data.errors && data.errors.length > 0) {
+        tabs.push({
+            id: 'errors', label: 'Errors',
+            badge: data.errors.length, badgeHl: true,
+            html: () => data.errors.map(e =>
+                `<div class="err-item"><strong>${esc(e.section)}: </strong>${esc(e.error)}</div>`
+            ).join('')
+        });
+    }
+
+    document.getElementById('tabList').innerHTML = tabs.map((t, i) => `
+        <button class="tab-btn ${i === 0 ? 'active' : ''}" data-tab="${t.id}" onclick="switchTab('${t.id}')">
+            ${esc(t.label)}
+            ${t.badge !== undefined
+                ? `<span class="tab-badge ${t.badgeHl ? 'hl' : ''}">${t.badge}</span>`
+                : ''}
+        </button>
+    `).join('');
+
+    document.getElementById('tabContent').innerHTML = tabs.map((t, i) => `
+        <div id="panel-${t.id}" class="tab-panel ${i === 0 ? 'active' : ''}">
+            ${t.html()}
+        </div>
+    `).join('');
+}
+
+function switchTab(id) {
+    document.querySelectorAll('.tab-btn').forEach(b =>
+        b.classList.toggle('active', b.dataset.tab === id));
+    document.querySelectorAll('.tab-panel').forEach(p =>
+        p.classList.toggle('active', p.id === `panel-${id}`));
+}
+
+// ── Table builder ────────────────────────────────────────────────────────────
+
+function buildTable(cols, rows, emptyMsg) {
+    if (!rows || rows.length === 0) {
+        return empty('📋', emptyMsg || 'No data', 'No records were returned for this query.');
+    }
+    const head = cols.map(c => `<th>${esc(c.l)}</th>`).join('');
+    const body = rows.map(row => {
+        const cells = cols.map(c => {
+            const v = row[c.k];
+            if (c.type === 'status')  return `<td>${statusBadge(v)}</td>`;
+            if (c.type === 'enabled') return `<td>${enabledBadge(v)}</td>`;
+            if (c.type === 'lat')     return `<td>${latCell(v)}</td>`;
+            return `<td>${esc(v ?? '—')}</td>`;
+        }).join('');
+        return `<tr>${cells}</tr>`;
+    }).join('');
+    return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function empty(icon, title, sub) {
+    return `<div class="empty"><div class="eicon">${icon}</div><div class="etitle">${esc(title)}</div><div>${esc(sub || '')}</div></div>`;
+}
+
+function statusBadge(status) {
+    if (status == null) return badge('unknown', 'Unknown');
+    const cls = status.toLowerCase().replace(/\s+/g, '-');
+    return badge(cls, status);
+}
+
+function badge(cls, label) {
+    return `<span class="badge b-${cls}"><span class="bdot"></span>${esc(label)}</span>`;
+}
+
+function enabledBadge(v) {
+    return v
+        ? `<span class="badge b-enabled">Enabled</span>`
+        : `<span class="badge b-disabled">Disabled</span>`;
+}
+
+function latCell(v) {
+    if (v == null || v === '') return `<span>—</span>`;
+    const n = Number(v);
+    const cls = n > 10 ? 'lat-bad' : n > 3 ? 'lat-warn' : 'lat-good';
+    return `<span class="${cls}">${n}s</span>`;
+}
+
+function esc(s) {
+    if (s == null) return '';
+    return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT') connect();
+});
+
+updateAuthFields();
+</script>
+</body>
+</html>
