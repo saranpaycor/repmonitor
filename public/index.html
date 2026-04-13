@@ -838,7 +838,13 @@ async function showAgentPanel(type) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(Object.assign({ type }, lastFormData))
         });
-        const json = await resp.json();
+        const text = await resp.text();
+        let json;
+        try { json = JSON.parse(text); }
+        catch (_) {
+            content.innerHTML = '<div class="err-item"><strong>Server error (non-JSON response):</strong> The server may need to be restarted. Check that <code>node server.js</code> is running with the latest code.</div>';
+            return;
+        }
 
         if (!resp.ok || !json.success) {
             content.innerHTML = '<div class="err-item"><strong>Error: </strong>' + esc(json.error || 'Failed to fetch agents.') + '</div>';
