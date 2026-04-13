@@ -160,11 +160,15 @@ app.post('/api/agents', async (req, res) => {
 
         let agents = [];
         if (type === 'distribution') {
+            const cols = await distColumns(pool, 'MSdistribution_agents');
+            const subscriberCol = cols.has('subscriber')
+                ? `ISNULL(da.subscriber, '')`
+                : `ISNULL(da.subscriber_db, '')`;
             const r = await pool.request().query(`
                 SELECT
                     da.publisher_db                             AS PublisherDB,
                     da.publication                              AS Publication,
-                    ISNULL(da.subscriber, '')                   AS Subscriber,
+                    ${subscriberCol}                            AS Subscriber,
                     da.subscriber_db                            AS SubscriberDB,
                     da.name                                     AS AgentName,
                     CASE dh.runstatus
@@ -223,6 +227,22 @@ app.post('/api/agents', async (req, res) => {
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
+
+// Returns set of column names (lowercase) that exist in a distribution table
+async function distColumns(pool, tableName) {
+    try {
+        const r = await pool.request().query(`
+            SELECT LOWER(c.name) AS col
+            FROM   distribution.sys.columns c
+            JOIN   distribution.sys.objects o ON c.object_id = o.object_id
+            JOIN   distribution.sys.schemas s ON o.schema_id = s.schema_id
+            WHERE  s.name = 'dbo' AND o.name = '${tableName}'
+        `);
+        return new Set((r.recordset || []).map(row => row.col));
+    } catch (e) {
+        return new Set();
+    }
+}
 
 const AGENT_STATUS_CASE = (col) => `
     CASE ${col}
@@ -346,11 +366,15 @@ async function queryReplicationInfo(pool) {
 
     // Distribution Agents
     result.distributionAgents = await safeQuery(pool, 'Distribution Agents', async (p) => {
+        const cols = await distColumns(p, 'MSdistribution_agents');
+        const subscriberCol = cols.has('subscriber')
+            ? `ISNULL(da.subscriber, '')`
+            : `ISNULL(da.subscriber_db, '')`;
         const r = await p.request().query(`
             SELECT
                 da.publisher_db                             AS PublisherDB,
                 da.publication                              AS Publication,
-                ISNULL(da.subscriber, '')                   AS Subscriber,
+                ${subscriberCol}                            AS Subscriber,
                 da.subscriber_db                            AS SubscriberDB,
                 da.name                                     AS AgentName,
                 CASE dh.runstatus
@@ -440,11 +464,15 @@ async function queryReplicationInfo(pool) {
 
     // Merge Agents
     result.mergeAgents = await safeQuery(pool, 'Merge Agents', async (p) => {
+        const cols = await distColumns(p, 'MSmerge_agents');
+        const subscriberCol = cols.has('subscriber')
+            ? `ISNULL(ma.subscriber, '')`
+            : `ISNULL(ma.subscriber_db, '')`;
         const r = await p.request().query(`
             SELECT
                 ma.publisher_db                             AS PublisherDB,
                 ma.publication                              AS Publication,
-                ISNULL(ma.subscriber, '')                   AS Subscriber,
+                ${subscriberCol}                            AS Subscriber,
                 ma.subscriber_db                            AS SubscriberDB,
                 ma.name                                     AS AgentName,
                 CASE mh.runstatus
