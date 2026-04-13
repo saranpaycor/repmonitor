@@ -424,6 +424,18 @@
                 </svg>
                 Refresh
             </button>
+            <button id="distBtn" class="btn btn-secondary" onclick="showAgentPanel('distribution')" style="display:none">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 1a2 2 0 110 4 2 2 0 010-4zM1.5 8a2 2 0 114 0 2 2 0 01-4 0zm7 0a2 2 0 114 0 2 2 0 01-4 0zM1.5 13a2 2 0 114 0 2 2 0 01-4 0zm7 0a2 2 0 114 0 2 2 0 01-4 0z"/>
+                </svg>
+                Distribution Agents
+            </button>
+            <button id="lrBtn" class="btn btn-secondary" onclick="showAgentPanel('logreader')" style="display:none">
+                <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M2 2.5A2.5 2.5 0 014.5 0h7A2.5 2.5 0 0114 2.5v10.795l-2.224-1.316a.5.5 0 00-.507 0L9 13.295l-2.269-1.316a.5.5 0 00-.507 0L4 13.295V2.5zm4 2a.5.5 0 000 1h4a.5.5 0 000-1H6zm0 2.5a.5.5 0 000 1h4a.5.5 0 000-1H6zm0 2.5a.5.5 0 000 1h2a.5.5 0 000-1H6z"/>
+                </svg>
+                Log Reader Agents
+            </button>
             <label class="auto-refresh-label" id="autoRefreshLabel" style="display:none">
                 <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()">
                 Auto-refresh (30 s)
@@ -431,6 +443,17 @@
         </div>
 
         <div id="alertBox" class="alert"></div>
+    </div>
+
+    <!-- Agent Quick-View Panel -->
+    <div id="agentPanel" style="display:none; margin-bottom:20px;">
+        <div class="card" style="margin-bottom:0;">
+            <div class="card-title" style="justify-content:space-between;">
+                <span id="agentPanelLabel">Agents</span>
+                <button class="btn btn-secondary" style="height:28px;padding:0 12px;font-size:12px;" onclick="closeAgentPanel()">&#x2715; Close</button>
+            </div>
+            <div id="agentPanelContent"></div>
+        </div>
     </div>
 
     <!-- Results -->
@@ -495,6 +518,8 @@ function hideLoading() { document.getElementById('loading').classList.remove('sh
 function setBusy(busy) {
     document.getElementById('connectBtn').disabled = busy;
     document.getElementById('refreshBtn').disabled = busy;
+    document.getElementById('distBtn').disabled = busy;
+    document.getElementById('lrBtn').disabled = busy;
 }
 
 // ── Connect / Refresh ───────────────────────────────────────────────────────
@@ -564,9 +589,12 @@ function setConnected(connected, serverName) {
     dot.className = 'status-dot' + (connected ? ' connected' : '');
     text.textContent = connected ? `Connected — ${serverName}` : 'Not connected';
     document.getElementById('refreshBtn').style.display      = connected ? 'inline-flex' : 'none';
+    document.getElementById('distBtn').style.display          = connected ? 'inline-flex' : 'none';
+    document.getElementById('lrBtn').style.display            = connected ? 'inline-flex' : 'none';
     document.getElementById('autoRefreshLabel').style.display = connected ? 'flex'        : 'none';
     if (!connected) {
         document.getElementById('results').classList.remove('visible');
+        document.getElementById('agentPanel').style.display = 'none';
         clearInterval(autoRefreshTimer);
     }
 }
@@ -574,6 +602,7 @@ function setConnected(connected, serverName) {
 // ── Render ──────────────────────────────────────────────────────────────────
 
 function renderResults(data) {
+    lastData = data;
     document.getElementById('results').classList.add('visible');
 
     document.getElementById('lastUpdated').textContent = 'Last updated: ' + new Date().toLocaleString();
@@ -782,6 +811,51 @@ function esc(s) {
     return String(s)
         .replace(/&/g,'&amp;').replace(/</g,'&lt;')
         .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+// ── Agent Quick-View Panel ───────────────────────────────────────────────────
+
+let lastData = null;
+
+function showAgentPanel(type) {
+    if (!lastData) return;
+
+    const panel   = document.getElementById('agentPanel');
+    const label   = document.getElementById('agentPanelLabel');
+    const content = document.getElementById('agentPanelContent');
+
+    const noDistHtml = !lastData.hasDistributionDb
+        ? '<div class="info-note">&#x26A0;&#xFE0F; No <code>distribution</code> database found on this server.</div>'
+        : '';
+
+    if (type === 'distribution') {
+        label.textContent = 'Distribution Agents (' + lastData.distributionAgents.length + ')';
+        content.innerHTML = noDistHtml + buildTable(
+            [{k:'PublisherDB',  l:'Publisher DB'},
+             {k:'Publication',  l:'Publication'},
+             {k:'Subscriber',   l:'Subscriber'},
+             {k:'SubscriberDB', l:'Subscriber DB'},
+             {k:'Status',       l:'Status', type:'status'},
+             {k:'LastAction',   l:'Last Action'},
+             {k:'LastSyncTime', l:'Last Sync'}],
+            lastData.distributionAgents, 'No distribution agents found');
+    } else {
+        label.textContent = 'Log Reader Agents (' + lastData.logReaderAgents.length + ')';
+        content.innerHTML = noDistHtml + buildTable(
+            [{k:'PublisherDB',  l:'Publisher DB'},
+             {k:'Publication',  l:'Publication'},
+             {k:'Status',       l:'Status', type:'status'},
+             {k:'LastAction',   l:'Last Action'},
+             {k:'LastSyncTime', l:'Last Sync'}],
+            lastData.logReaderAgents, 'No log reader agents found');
+    }
+
+    panel.style.display = 'block';
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function closeAgentPanel() {
+    document.getElementById('agentPanel').style.display = 'none';
 }
 
 // ── Init ─────────────────────────────────────────────────────────────────────
